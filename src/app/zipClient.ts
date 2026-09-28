@@ -124,9 +124,9 @@ export async function saveEntriesAsZip(
     let doneBytes = 0;
 
     for (const entry of entries) {
-      const z = createZipEntry(entry.relPath, entry.uploaded ?? undefined);
-      zip.add(z);
       if (entry.dir) {
+        const z = createZipEntry(entry.relPath, entry.uploaded ?? undefined);
+        zip.add(z);
         z.push(new Uint8Array(0), true);
         continue;
       }
@@ -134,6 +134,17 @@ export async function saveEntriesAsZip(
       if (!res.ok || !res.body) {
         throw new Error(`HTTP ${res.status}: ${entry.relPath}`);
       }
+      // 目录占位对象被误当文件时（探测遗漏的兜底）：写目录条目，不产 0 字节假文件。
+      if ((res.headers.get("Content-Type") || "").includes("application/x-directory")) {
+        const dirName = entry.relPath.endsWith("/") ? entry.relPath : `${entry.relPath}/`;
+        const z = createZipEntry(dirName, entry.uploaded ?? undefined);
+        zip.add(z);
+        z.push(new Uint8Array(0), true);
+        await drain();
+        continue;
+      }
+      const z = createZipEntry(entry.relPath, entry.uploaded ?? undefined);
+      zip.add(z);
       const reader = res.body.getReader();
       for (;;) {
         const { done, value } = await reader.read();

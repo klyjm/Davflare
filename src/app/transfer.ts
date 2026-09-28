@@ -218,24 +218,24 @@ function fetchDriveFile(key: string) {
   return authFetch(`${WEBDAV_ENDPOINT}${encodeKey(key)}`);
 }
 
-async function statKey(
+// HEAD 拿单键元数据。只用 webdav 会话端点——/api/stat 只认 API Key，
+// 网页会话调它会 401 并触发 authFetch 清凭据弹登录框（踩过的坑）。
+async function headMeta(
   key: string
-): Promise<{ isDir: boolean; size: number; uploaded: string | null } | null> {
+): Promise<{ ok: boolean; isDir: boolean; size: number; uploaded: string | null }> {
   try {
-    const res = await authFetch(`/api/stat?path=${encodeURIComponent(key)}`);
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      kind?: string;
-      size?: number;
-      uploaded?: string | null;
-    };
+    const res = await authFetch(`${WEBDAV_ENDPOINT}${encodeKey(key)}`, {
+      method: "HEAD",
+    });
+    const contentType = res.headers.get("Content-Type") || "";
     return {
-      isDir: data.kind === "directory",
-      size: Number(data.size) || 0,
-      uploaded: data.uploaded ?? null,
+      ok: res.ok,
+      isDir: contentType.includes("application/x-directory"),
+      size: Number(res.headers.get("Content-Length")) || 0,
+      uploaded: res.headers.get("Last-Modified"),
     };
   } catch {
-    return null;
+    return { ok: false, isDir: false, size: 0, uploaded: null };
   }
 }
 
@@ -275,15 +275,27 @@ async function expandZipEntries(
   for (const rawKey of keys) {
     const key = rawKey.replace(/\/+$/, "");
     if (!key || seenDirs.has(key)) continue;
-    const stat = await statKey(key);
-    if (stat?.isDir) {
+    // 目录判定只用 PROPFIND（有子项）或 HEAD 的 x-directory 标记，
+    // 不打 /api/*：那些端点多为 API-Key 专用。
+    let items: FileItem[] = [];
+    try {
+      items = await fetchPath(`${key}/`);
+    } catch {
+      items = [];
+    }
+    if (items.length > 0) {
       await walkDir(key);
+      continue;
+    }
+    const meta = await headMeta(key);
+    if (meta.isDir) {
+      entries.push({ key, relPath: `${rel(key)}/`, size: 0, dir: true });
     } else {
       entries.push({
         key,
         relPath: rel(key),
-        size: stat?.size ?? 0,
-        uploaded: stat?.uploaded,
+        size: meta.size,
+        uploaded: meta.uploaded,
       });
     }
   }
