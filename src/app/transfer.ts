@@ -2,6 +2,7 @@ import { authFetch } from "./auth";
 import { DownloadRequest, FileItem } from "./types";
 import { basename, encodeKey } from "./utils";
 import { translate } from "./strings";
+import { saveEntriesAsZip, supportsDiskZip, type ZipEntry } from "./zipClient";
 
 import { WEBDAV_ENDPOINT } from "./uploadTransfer";
 
@@ -208,11 +209,97 @@ export function archiveNameFor(folderKey: string): string {
   return name ? `${name}.zip` : "archive.zip";
 }
 
+// ---------- 客户端打包下载（fork 补丁）----------
+// 免费档 Pages Function 服务端打包大文件夹会因 CPU/内存上限断流（截断 zip/0B），
+// 见 src/app/zipClient.ts 头注。支持 File System Access API 的浏览器走本地打包；
+// 其余回退旧的服务端 /api/archive（小文件夹仍可用）。
+
+function fetchDriveFile(key: string) {
+  return authFetch(`${WEBDAV_ENDPOINT}${encodeKey(key)}`);
+}
+
+async function statKey(
+  key: string
+): Promise<{ isDir: boolean; size: number; uploaded: string | null } | null> {
+  try {
+    const res = await authFetch(`/api/stat?path=${encodeURIComponent(key)}`);
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      kind?: string;
+      size?: number;
+      uploaded?: string | null;
+    };
+    return {
+      isDir: data.kind === "directory",
+      size: Number(data.size) || 0,
+      uploaded: data.uploaded ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 展开选中键为 zip 条目：文件直接收，目录递归 PROPFIND；空目录写占位条目。 */
+async function expandZipEntries(
+  keys: string[],
+  stripPrefix: string
+): Promise<ZipEntry[]> {
+  const base = stripPrefix.replace(/\/+$/, "");
+  const rel = (key: string) =>
+    base && key.startsWith(`${base}/`) ? key.slice(base.length + 1) : key;
+  const entries: ZipEntry[] = [];
+  const seenDirs = new Set<string>();
+
+  const walkDir = async (dirKey: string): Promise<void> => {
+    if (seenDirs.has(dirKey)) return;
+    seenDirs.add(dirKey);
+    const items = await fetchPath(`${dirKey}/`);
+    if (items.length === 0) {
+      entries.push({ key: dirKey, relPath: `${rel(dirKey)}/`, size: 0, dir: true });
+      return;
+    }
+    for (const item of items) {
+      if (item.key.startsWith("_$flaredrive$/")) continue;
+      if (item.isDir) await walkDir(item.key);
+      else {
+        entries.push({
+          key: item.key,
+          relPath: rel(item.key),
+          size: item.size,
+          uploaded: item.uploaded,
+        });
+      }
+    }
+  };
+
+  for (const rawKey of keys) {
+    const key = rawKey.replace(/\/+$/, "");
+    if (!key || seenDirs.has(key)) continue;
+    const stat = await statKey(key);
+    if (stat?.isDir) {
+      await walkDir(key);
+    } else {
+      entries.push({
+        key,
+        relPath: rel(key),
+        size: stat?.size ?? 0,
+        uploaded: stat?.uploaded,
+      });
+    }
+  }
+  return entries;
+}
+
 /**
- * POST /api/archive 多选打包。`base`（选中项所在文件夹）会让服务端把条目路径改为相对该文件夹；
- * 不传则条目为完整网盘路径（旧行为）。
+ * POST /api/archive 多选打包。`base`（选中项所在文件夹）会把条目路径改为相对该文件夹；
+ * 不传则条目为完整网盘路径（旧行为）。有磁盘句柄 API 时改为浏览器本地打包。
  */
 export async function downloadArchive(keys: string[], name = "archive.zip", base?: string) {
+  if (supportsDiskZip()) {
+    const baseKey = (base || "").replace(/\/+$/, "");
+    await saveEntriesAsZip(name, () => expandZipEntries(keys, baseKey), fetchDriveFile);
+    return;
+  }
   return enqueueOrRun(
     {
       name,
@@ -239,6 +326,14 @@ async function legacyDownloadArchive(keys: string[], name: string, base?: string
 /** 单个文件夹下载：与 `GET /api/archive?path=` 一致——`<文件夹名>.zip`，条目相对该文件夹。 */
 export async function downloadFolderArchive(folderKey: string) {
   const key = folderKey.replace(/\/+$/, "");
+  if (supportsDiskZip()) {
+    await saveEntriesAsZip(
+      archiveNameFor(key),
+      () => expandZipEntries([key], key),
+      fetchDriveFile
+    );
+    return;
+  }
   return enqueueOrRun(
     {
       name: archiveNameFor(key),
