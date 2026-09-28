@@ -1,0 +1,87 @@
+# Self-host deploy: build → ensure R2 bucket + lifecycle → ensure Pages project
+# → sync login secrets → wrangler pages deploy (uses wrangler.toml bindings).
+# Declarative/ensure-exists: safe to re-run on every push; resources are created
+# only when missing, lifecycle is a full declarative replace each run.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_NAME: davflare
+  BUCKET_NAME: file-relay
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Pin the major like upstream e2e does, so CI never drifts to an
+      # unknown new wrangler release.
+      - name: Install pinned wrangler
+        run: npm install --no-save wrangler@4
+
+      - name: Build
+        run: npm run build
+
+      - name: Ensure R2 bucket exists
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler r2 bucket info "$BUCKET_NAME" >/dev/null 2>&1 \
+            || npx wrangler r2 bucket create "$BUCKET_NAME"
+
+      # Full declarative replace: if rules were ever edited/deleted in the
+      # dashboard, the next push restores exactly these two rules.
+      - name: Apply bucket lifecycle (7-day objects, 1-day abort multipart)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: >
+          npx wrangler r2 bucket lifecycle set "$BUCKET_NAME"
+          --file scripts/lifecycle.json --force
+
+      - name: Ensure Pages project exists
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if ! npx wrangler pages project list 2>/dev/null | grep -qw "$PROJECT_NAME"; then
+            npx wrangler pages project create "$PROJECT_NAME" --production-branch main
+          fi
+
+      # Pages secrets are project-level and persist across deploys; re-put
+      # keeps them in sync with the GitHub secrets. Values never hit the repo.
+      - name: Sync login credentials (Pages secrets)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WEBDAV_USERNAME: ${{ secrets.WEBDAV_USERNAME }}
+          WEBDAV_PASSWORD: ${{ secrets.WEBDAV_PASSWORD }}
+        run: |
+          printf '%s' "$WEBDAV_USERNAME" | npx wrangler pages secret put WEBDAV_USERNAME --project-name "$PROJECT_NAME"
+          printf '%s' "$WEBDAV_PASSWORD" | npx wrangler pages secret put WEBDAV_PASSWORD --project-name "$PROJECT_NAME"
+
+      # Runs from the repo root, so wrangler picks up the committed
+      # wrangler.toml (R2 binding BUCKET + vars) automatically.
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler pages deploy build --project-name "$PROJECT_NAME" --branch main

@@ -10,4 +10,4 @@ WEBDAV_PUBLIC_READ = "0"
 
 [[r2_buckets]]
 binding = "BUCKET"
-bucket_name = "webdav"
+bucket_name = "file-relay"
