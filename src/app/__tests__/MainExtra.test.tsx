@@ -23,7 +23,7 @@ import {
   openFile,
   searchFiles,
 } from "../transfer";
-import { moveToTrash, restoreTrash } from "../trash";
+import { deleteTreePermanently } from "../hardDelete";
 import { setLang, strings, translate } from "../strings";
 import type { TransferTask } from "../types";
 
@@ -63,6 +63,10 @@ vi.mock("../trash", () => ({
   restoreTrash: vi.fn(),
 }));
 
+vi.mock("../hardDelete", () => ({
+  deleteTreePermanently: vi.fn(),
+}));
+
 vi.mock("../../PreviewDialog", () => ({ __esModule: true, default: () => null }));
 vi.mock("../../ShareDialog", () => ({ __esModule: true, default: () => null }));
 vi.mock("../../PublishSiteDialog", () => ({
@@ -87,8 +91,7 @@ const mockFetchPath = fetchPath as unknown as Mock;
 const mockSearch = searchFiles as unknown as Mock;
 const mockCopyPaste = copyPaste as unknown as Mock;
 const mockCreateFolder = createFolder as unknown as Mock;
-const mockMoveTrash = moveToTrash as unknown as Mock;
-const mockRestore = restoreTrash as unknown as Mock;
+const mockHardDelete = deleteTreePermanently as unknown as Mock;
 const mockCollect = collectFilesFromDataTransfer as unknown as Mock;
 const mockDownload = downloadFile as unknown as Mock;
 const mockFolderArchive = downloadFolderArchive as unknown as Mock;
@@ -172,10 +175,8 @@ beforeEach(() => {
   mockCopyPaste.mockResolvedValue(undefined);
   mockCreateFolder.mockReset();
   mockCreateFolder.mockResolvedValue(undefined);
-  mockMoveTrash.mockReset();
-  mockMoveTrash.mockResolvedValue({ results: [{ id: "t1" }] });
-  mockRestore.mockReset();
-  mockRestore.mockResolvedValue(undefined);
+  mockHardDelete.mockReset();
+  mockHardDelete.mockResolvedValue(1);
   mockCollect.mockReset();
   mockCollect.mockResolvedValue([]);
   mockDownload.mockReset();
@@ -332,7 +333,7 @@ describe("Main 上下文菜单动作", () => {
   });
 });
 
-describe("Main 删除-撤销/重试闭环", () => {
+describe("Main 永久删除/重试闭环", () => {
   async function openConfirmAndConfirm(onNotify: Mock) {
     renderMain({ kind: "folder", path: "" }, { onNotify });
     await waitFor(() => expect(screen.getByText("a.txt")).toBeInTheDocument());
@@ -345,47 +346,34 @@ describe("Main 删除-撤销/重试闭环", () => {
     fireEvent.click(screen.getByRole("button", { name: strings.confirmAction }));
   }
 
-  test("删除成功 → undo 恢复成功并再次刷新", async () => {
+  test("删除成功 → 永久删除提示（无 undo 入口）", async () => {
     const onNotify = vi.fn();
+    mockHardDelete.mockResolvedValueOnce(1);
     await openConfirmAndConfirm(onNotify);
-    await waitFor(() => expect(mockMoveTrash).toHaveBeenCalled());
-    await waitFor(() => expect(onNotify).toHaveBeenCalledTimes(1));
-    const undo = onNotify.mock.calls[0][2]?.action?.onClick;
-    expect(undo).toBeTruthy();
-    await act(async () => {
-      undo();
-    });
-    await waitFor(() => expect(mockRestore).toHaveBeenCalledWith(["t1"]));
+    await waitFor(() => expect(mockHardDelete).toHaveBeenCalledWith(["a.txt"]));
     await waitFor(() =>
-      expect(onNotify).toHaveBeenCalledWith(translate("undoDeleteDone"), "success")
+      expect(onNotify).toHaveBeenCalledWith(
+        translate("deletedCount", { count: 1 }),
+        "success",
+        expect.anything()
+      )
     );
-  });
-
-  test("删除成功 → undo 恢复失败 → 错误提示", async () => {
-    const onNotify = vi.fn();
-    mockRestore.mockRejectedValue(new Error("restore-fail"));
-    await openConfirmAndConfirm(onNotify);
-    await waitFor(() => expect(mockMoveTrash).toHaveBeenCalled());
-    await waitFor(() => expect(onNotify).toHaveBeenCalledTimes(1));
-    const undo = onNotify.mock.calls[0][2]?.action?.onClick;
-    expect(undo).toBeTruthy();
-    await act(async () => {
-      undo();
-    });
-    await waitFor(() => expect(mockRestore).toHaveBeenCalledWith(["t1"]));
-    await waitFor(() => expect(onNotify).toHaveBeenCalledWith("restore-fail", "error"));
+    // fork 语义：无回收站、无撤销
+    expect(onNotify.mock.calls[0][2]?.action).toBeUndefined();
   });
 
   test("删除失败 → retry 重试成功", async () => {
     const onNotify = vi.fn();
-    mockMoveTrash.mockRejectedValueOnce(new Error("trash-fail"));
+    mockHardDelete.mockRejectedValueOnce(new Error("delete-fail"));
     await openConfirmAndConfirm(onNotify);
-    await waitFor(() => expect(onNotify).toHaveBeenCalledWith("trash-fail", "error", expect.anything()));
-    const retry = onNotify.mock.calls.find((c) => c[0] === "trash-fail")![2].action.onClick;
+    await waitFor(() =>
+      expect(onNotify).toHaveBeenCalledWith("delete-fail", "error", expect.anything())
+    );
+    const retry = onNotify.mock.calls.find((c) => c[0] === "delete-fail")![2].action.onClick;
     await act(async () => {
       retry();
     });
-    await waitFor(() => expect(mockMoveTrash).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mockHardDelete).toHaveBeenCalledTimes(2));
   });
 });
 

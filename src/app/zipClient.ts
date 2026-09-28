@@ -65,7 +65,10 @@ export function supportsDiskZip(): boolean {
 
 let overlay: HTMLDivElement | null = null;
 
-function showProgress(): (done: number, total: number) => void {
+/** 右下角自含进度浮层（fork 补丁通用）：返回 (done, total) 更新器，配 hideProgressOverlay 用。 */
+export function showProgressOverlay(
+  label: string
+): (done: number, total: number) => void {
   if (!overlay) {
     overlay = document.createElement("div");
     overlay.style.cssText =
@@ -78,11 +81,11 @@ function showProgress(): (done: number, total: number) => void {
   return (done, total) => {
     if (!overlay) return;
     const pct = total > 0 ? `（${Math.min(100, Math.round((done / total) * 100))}%）` : "";
-    overlay.textContent = `打包下载中：${fmt(done)} / ${fmt(total)}${pct}`;
+    overlay.textContent = `${label}：${fmt(done)} / ${fmt(total)}${pct}`;
   };
 }
 
-function hideProgress() {
+export function hideProgressOverlay() {
   overlay?.remove();
   overlay = null;
 }
@@ -104,7 +107,7 @@ export async function saveEntriesAsZip(
     types: [{ description: "ZIP", accept: { "application/zip": [".zip"] } }],
   });
   const writable = await fileHandle.createWritable();
-  const setProgress = showProgress();
+  const setProgress = showProgressOverlay("打包下载中");
 
   // fflate 的回调是同步的：把磁盘写暂存起来，攒一批后串行落盘，内存有界。
   const pending: Promise<unknown>[] = [];
@@ -165,6 +168,6 @@ export async function saveEntriesAsZip(
     await writable.abort(error).catch(() => undefined);
     throw error;
   } finally {
-    hideProgress();
+    hideProgressOverlay();
   }
 }

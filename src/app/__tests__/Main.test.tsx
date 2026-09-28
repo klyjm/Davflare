@@ -18,7 +18,7 @@ import {
   searchFiles,
   selectDirectoryFiles,
 } from "../transfer";
-import { moveToTrash, restoreTrash } from "../trash";
+import { deleteTreePermanently } from "../hardDelete";
 import { setLang, strings, translate } from "../strings";
 
 vi.mock("../auth", () => ({
@@ -52,9 +52,8 @@ vi.mock("../transfer", () => ({
   selectDirectoryFiles: vi.fn(),
 }));
 
-vi.mock("../trash", () => ({
-  moveToTrash: vi.fn(),
-  restoreTrash: vi.fn(),
+vi.mock("../hardDelete", () => ({
+  deleteTreePermanently: vi.fn(),
 }));
 
 vi.mock("../../PreviewDialog", () => ({ __esModule: true, default: () => null }));
@@ -76,8 +75,7 @@ const mockFetchPath = fetchPath as unknown as Mock;
 const mockSearch = searchFiles as unknown as Mock;
 const mockCopyPaste = copyPaste as unknown as Mock;
 const mockCreateFolder = createFolder as unknown as Mock;
-const mockMoveTrash = moveToTrash as unknown as Mock;
-const mockRestore = restoreTrash as unknown as Mock;
+const mockHardDelete = deleteTreePermanently as unknown as Mock;
 const mockCollect = collectFilesFromDataTransfer as unknown as Mock;
 const mockSelectDir = selectDirectoryFiles as unknown as Mock;
 const mockDownload = downloadFile as unknown as Mock;
@@ -166,10 +164,8 @@ beforeEach(() => {
   mockCopyPaste.mockResolvedValue(undefined);
   mockCreateFolder.mockReset();
   mockCreateFolder.mockResolvedValue(undefined);
-  mockMoveTrash.mockReset();
-  mockMoveTrash.mockResolvedValue({ results: [{ id: "t1" }] });
-  mockRestore.mockReset();
-  mockRestore.mockResolvedValue(undefined);
+  mockHardDelete.mockReset();
+  mockHardDelete.mockResolvedValue(1);
   mockCollect.mockReset();
   mockCollect.mockResolvedValue([]);
   mockSelectDir.mockReset();
@@ -267,7 +263,7 @@ describe("Main", () => {
     expect(onNotify).toHaveBeenCalledWith(translate("copiedToClipboard"), "success");
     fireEvent.click(screen.getByRole("button", { name: strings.delete }));
     fireEvent.click(screen.getByRole("button", { name: strings.confirmAction }));
-    await waitFor(() => expect(mockMoveTrash).toHaveBeenCalled());
+    await waitFor(() => expect(mockHardDelete).toHaveBeenCalled());
   });
 
   test("context menu copy/cut/download and open folder", async () => {

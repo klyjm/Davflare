@@ -1,4 +1,5 @@
 import { ClipboardState } from "./clipboard";
+import { deleteTreePermanently } from "./hardDelete";
 import { NotifyFn } from "./notify";
 import { strings, translate } from "./strings";
 import {
@@ -6,7 +7,6 @@ import {
   copyPaste,
   fetchPath,
 } from "./transfer";
-import { moveToTrash, restoreTrash } from "./trash";
 import { transferKeys } from "./useUploadInputs";
 import { FileItem } from "./types";
 import { errorMessage } from "./utils";
@@ -81,29 +81,16 @@ export function useFileOperations(deps: FileOperationsDeps) {
   const handleConfirmDelete = async () => {
     if (!confirmDelete) return;
     const targets = confirmDelete;
+    // fork 补丁：删除改为客户端分批永久删除。服务端软删除要在单次请求里
+    // 把整个子树复制进回收站，免费档 Worker 对大文件夹必撞 1102；本桶另有
+    // 7 天对象 lifecycle 兜底，回收站无实际价值。
     const runDelete = async () => {
-      return moveToTrash(targets);
+      return deleteTreePermanently(targets);
     };
     try {
-      const result = await runDelete();
-      const trashIds = result.results.map((item) => item.id);
-      onNotify(translate("movedToTrashCount", { count: trashIds.length }), "success", {
+      const deleted = await runDelete();
+      onNotify(translate("deletedCount", { count: deleted }), "success", {
         duration: 7000,
-        action: trashIds.length
-          ? {
-              label: strings.undo,
-              onClick: () => {
-                restoreTrash(trashIds)
-                  .then(() => {
-                    onNotify(translate("undoDeleteDone"), "success");
-                  })
-                  .catch((error) =>
-                    onNotify(errorMessage(error), "error")
-                  )
-                  .finally(() => loadListing());
-              },
-            }
-          : undefined,
       });
     } catch (error) {
       onNotify(errorMessage(error), "error", {

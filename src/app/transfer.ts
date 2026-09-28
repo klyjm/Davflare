@@ -303,6 +303,49 @@ async function expandZipEntries(
 }
 
 /**
+ * 展开选中键为完整键清单（删除等批量操作用）：files 为全部文件键，
+ * dirs 为全部目录标记键（含选中目录自身），返回时已按"子目录在前"排序。
+ */
+export async function collectTreeKeys(
+  keys: string[]
+): Promise<{ files: string[]; dirs: string[] }> {
+  const files: string[] = [];
+  const dirs: string[] = [];
+  const seen = new Set<string>();
+
+  const walkDir = async (dirKey: string): Promise<void> => {
+    if (seen.has(dirKey)) return;
+    seen.add(dirKey);
+    dirs.push(dirKey);
+    const items = await fetchPath(`${dirKey}/`);
+    for (const item of items) {
+      if (item.key.startsWith("_$flaredrive$/")) continue;
+      if (item.isDir) await walkDir(item.key);
+      else files.push(item.key);
+    }
+  };
+
+  for (const rawKey of keys) {
+    const key = rawKey.replace(/\/+$/, "");
+    if (!key || seen.has(key)) continue;
+    let items: FileItem[] = [];
+    try {
+      items = await fetchPath(`${key}/`);
+    } catch {
+      items = [];
+    }
+    if (items.length > 0) {
+      await walkDir(key);
+      continue;
+    }
+    const meta = await headMeta(key);
+    if (meta.isDir) await walkDir(key);
+    else if (meta.ok) files.push(key);
+  }
+  return { files, dirs: dirs.reverse() };
+}
+
+/**
  * POST /api/archive 多选打包。`base`（选中项所在文件夹）会把条目路径改为相对该文件夹；
  * 不传则条目为完整网盘路径（旧行为）。有磁盘句柄 API 时改为浏览器本地打包。
  */
