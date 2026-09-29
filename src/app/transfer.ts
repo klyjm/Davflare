@@ -2,7 +2,13 @@ import { authFetch } from "./auth";
 import { DownloadRequest, FileItem } from "./types";
 import { basename, encodeKey } from "./utils";
 import { translate } from "./strings";
-import { saveEntriesAsZip, supportsDiskZip, type ZipEntry } from "./zipClient";
+import { enqueueJob } from "./jobs";
+import {
+  pickTargetDirectory,
+  supportsDiskWrite,
+  writeTreeToDirectory,
+  type DiskEntry,
+} from "./diskDownload";
 
 import { WEBDAV_ENDPOINT } from "./uploadTransfer";
 
@@ -209,13 +215,13 @@ export function archiveNameFor(folderKey: string): string {
   return name ? `${name}.zip` : "archive.zip";
 }
 
-// ---------- 客户端打包下载（fork 补丁）----------
+// ---------- 目录形式下载（fork 补丁）----------
 // 免费档 Pages Function 服务端打包大文件夹会因 CPU/内存上限断流（截断 zip/0B），
-// 见 src/app/zipClient.ts 头注。支持 File System Access API 的浏览器走本地打包；
-// 其余回退旧的服务端 /api/archive（小文件夹仍可用）。
+// 见 src/app/diskDownload.ts 头注。支持 File System Access API 的浏览器把条目
+// 按原目录结构直接写盘（非 zip）；其余回退旧的服务端 /api/archive（小文件夹仍可用）。
 
-function fetchDriveFile(key: string) {
-  return authFetch(`${WEBDAV_ENDPOINT}${encodeKey(key)}`);
+function fetchDriveFile(key: string, signal?: AbortSignal) {
+  return authFetch(`${WEBDAV_ENDPOINT}${encodeKey(key)}`, { signal });
 }
 
 // HEAD 拿单键元数据。只用 webdav 会话端点——/api/stat 只认 API Key，
@@ -239,15 +245,15 @@ async function headMeta(
   }
 }
 
-/** 展开选中键为 zip 条目：文件直接收，目录递归 PROPFIND；空目录写占位条目。 */
-async function expandZipEntries(
+/** 展开选中键为写盘条目：文件直接收，目录递归 PROPFIND；空目录写占位条目。 */
+async function expandDiskEntries(
   keys: string[],
   stripPrefix: string
-): Promise<ZipEntry[]> {
+): Promise<DiskEntry[]> {
   const base = stripPrefix.replace(/\/+$/, "");
   const rel = (key: string) =>
     base && key.startsWith(`${base}/`) ? key.slice(base.length + 1) : key;
-  const entries: ZipEntry[] = [];
+  const entries: DiskEntry[] = [];
   const seenDirs = new Set<string>();
 
   const walkDir = async (dirKey: string): Promise<void> => {
@@ -345,14 +351,53 @@ export async function collectTreeKeys(
   return { files, dirs: dirs.reverse() };
 }
 
+/** 把“展开条目 + 按目录结构写盘”排入传输面板（type === "job"，按字节报进度）。 */
+function enqueueTreeDownload({
+  root,
+  subfolder,
+  expand,
+  name,
+}: {
+  root: FileSystemDirectoryHandle;
+  subfolder: string;
+  expand: () => Promise<DiskEntry[]>;
+  name: string;
+}) {
+  enqueueJob({
+    name,
+    unit: "bytes",
+    run: async ({ signal, report }) => {
+      const entries = await expand();
+      await writeTreeToDirectory({
+        root,
+        subfolder,
+        entries,
+        fetchFile: fetchDriveFile,
+        signal,
+        report,
+      });
+    },
+  });
+}
+
 /**
  * POST /api/archive 多选打包。`base`（选中项所在文件夹）会把条目路径改为相对该文件夹；
- * 不传则条目为完整网盘路径（旧行为）。有磁盘句柄 API 时改为浏览器本地打包。
+ * 不传则条目为完整网盘路径（旧行为）。有磁盘句柄 API 时改为目录形式写盘。
  */
 export async function downloadArchive(keys: string[], name = "archive.zip", base?: string) {
-  if (supportsDiskZip()) {
-    const baseKey = (base || "").replace(/\/+$/, "");
-    await saveEntriesAsZip(name, () => expandZipEntries(keys, baseKey), fetchDriveFile);
+  if (supportsDiskWrite()) {
+    // 目录选择器必须在点击的用户激活期内弹出：先弹窗（取消即放弃），
+    // 展开与写盘都放到之后的 job 里执行。
+    const dir = await pickTargetDirectory();
+    if (dir) {
+      const baseKey = (base || "").replace(/\/+$/, "");
+      enqueueTreeDownload({
+        root: dir,
+        subfolder: basename(baseKey),
+        expand: () => expandDiskEntries(keys, baseKey),
+        name: name.replace(/\.zip$/, ""),
+      });
+    }
     return;
   }
   return enqueueOrRun(
@@ -378,15 +423,21 @@ async function legacyDownloadArchive(keys: string[], name: string, base?: string
   saveBlob(await res.blob(), name);
 }
 
-/** 单个文件夹下载：与 `GET /api/archive?path=` 一致——`<文件夹名>.zip`，条目相对该文件夹。 */
+/** 单个文件夹下载：有磁盘句柄 API 时以目录形式写入所选文件夹（非 zip）；
+ * 否则回退与 `GET /api/archive?path=` 一致的服务端 zip。 */
 export async function downloadFolderArchive(folderKey: string) {
   const key = folderKey.replace(/\/+$/, "");
-  if (supportsDiskZip()) {
-    await saveEntriesAsZip(
-      archiveNameFor(key),
-      () => expandZipEntries([key], key),
-      fetchDriveFile
-    );
+  if (supportsDiskWrite()) {
+    // 同 downloadArchive：先弹目录选择器（用户激活期内），再入队写盘。
+    const dir = await pickTargetDirectory();
+    if (dir) {
+      enqueueTreeDownload({
+        root: dir,
+        subfolder: basename(key),
+        expand: () => expandDiskEntries([key], key),
+        name: basename(key) || "archive",
+      });
+    }
     return;
   }
   return enqueueOrRun(

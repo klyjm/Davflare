@@ -11,7 +11,8 @@ import React, {
 import { translate } from "./strings";
 import { processTransferTask, registerDownloadDispatcher } from "./transfer";
 import { processDownloadTask } from "./downloadTransfer";
-import { DownloadRequest, TransferTask } from "./types";
+import { registerJobDispatcher } from "./jobs";
+import { DownloadRequest, JobSpec, TransferTask } from "./types";
 
 const CONCURRENCY = 2;
 const AUTO_RETRY_MAX = 1;
@@ -25,6 +26,7 @@ interface EnqueueRequest {
 interface TransferQueueActions {
   enqueue: (...requests: EnqueueRequest[]) => void;
   enqueueDownload: (request: DownloadRequest) => void;
+  enqueueJob: (spec: JobSpec) => void;
   pause: (id: string) => void;
   resume: (id: string) => void;
   retry: (id: string) => void;
@@ -41,6 +43,7 @@ const TransferQueueGlobalPausedContext = createContext(false);
 const TransferQueueActionsContext = createContext<TransferQueueActions>({
   enqueue: () => {},
   enqueueDownload: () => {},
+  enqueueJob: () => {},
   pause: () => {},
   resume: () => {},
   retry: () => {},
@@ -74,6 +77,25 @@ function createId() {
     return crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+// job 任务（type === "job"）：执行体存在 task.job 上，report 回报进度、
+// signal 支持取消；任务本身不可断点续跑，重试从头执行。
+async function runJobTask({
+  task,
+  onTaskProgress,
+  signal,
+}: {
+  task: TransferTask;
+  onTaskProgress?: (event: { loaded: number; total: number }) => void;
+  onTaskState?: (patch: Partial<TransferTask>) => void;
+  signal?: AbortSignal;
+}) {
+  if (task.type !== "job" || !task.job) throw new Error("Invalid task");
+  await task.job({
+    signal,
+    report: (loaded, total) => onTaskProgress?.({ loaded, total }),
+  });
 }
 
 export function TransferQueueProvider({
@@ -146,6 +168,26 @@ export function TransferQueueProvider({
     ]);
   };
 
+  // job 任务：执行体与进度单位由 JobSpec 给出（删除按项数、目录下载按字节），
+  // 无 uploadId，失败重试从头执行。
+  const enqueueJob = (spec: JobSpec) => {
+    commitTasks((tasks) => [
+      ...tasks,
+      {
+        id: createId(),
+        type: "job",
+        status: "pending",
+        name: spec.name,
+        basedir: "",
+        remoteKey: "",
+        loaded: 0,
+        total: spec.total ?? 0,
+        unit: spec.unit ?? "bytes",
+        job: spec.run,
+      },
+    ]);
+  };
+
   const startTask = (task: TransferTask) => {
     if (runningRef.current.has(task.id)) return;
 
@@ -159,7 +201,11 @@ export function TransferQueueProvider({
 
     const latest = tasksRef.current.find((item) => item.id === task.id) ?? task;
     const runTask =
-      latest.type === "download" ? processDownloadTask : processTransferTask;
+      latest.type === "job"
+        ? runJobTask
+        : latest.type === "download"
+          ? processDownloadTask
+          : processTransferTask;
     runTask({
       task: latest,
       signal: controller.signal,
@@ -244,10 +290,19 @@ export function TransferQueueProvider({
     return () => registerDownloadDispatcher(null);
   }, []);
 
+  // job 入口（hardDelete / 目录下载）经 dispatcher 转到本队列，同上。
+  const enqueueJobRef = useRef(enqueueJob);
+  enqueueJobRef.current = enqueueJob;
+  useEffect(() => {
+    registerJobDispatcher((spec) => enqueueJobRef.current(spec));
+    return () => registerJobDispatcher(null);
+  }, []);
+
   const actions = useMemo<TransferQueueActions>(
     () => ({
       enqueue,
       enqueueDownload,
+      enqueueJob,
       pause: (id) => {
         pausedIdsRef.current.add(id);
         const controller = controllersRef.current.get(id);

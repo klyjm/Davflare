@@ -32,6 +32,7 @@ function statusLabel(task: TransferTask) {
     case "pending":
       return translate("statusPending");
     case "in-progress":
+      if (task.type === "job") return translate("statusWorking");
       if (task.type === "download") return translate("statusDownloading");
       return resumable
         ? translate("statusMultipartUploading")
@@ -73,7 +74,10 @@ function TransferManager({
 
   // zip 归档为流式打包（无 Content-Length），按任务是否有总量分开汇总：
   // 总进度只统计有总量的任务，未知总量的在任务行内以已下载字节数呈现。
-  const sizedTasks = tasks.filter((task) => task.total > 0);
+  // 按项数计的任务（job/count）不混进字节总进度。
+  const sizedTasks = tasks.filter(
+    (task) => task.total > 0 && task.unit !== "count"
+  );
   const total = sizedTasks.reduce((sum, task) => sum + task.total, 0);
   const loaded = sizedTasks.reduce((sum, task) => sum + task.loaded, 0);
 
@@ -128,6 +132,8 @@ function TransferManager({
     overallSpeed > 0 ? formatEta((total - loaded) / overallSpeed) : "";
 
   const taskEtaText = (task: TransferTask) => {
+    // 按项数计的任务无速度概念（删得多快取决于并发响应），不显示 ETA
+    if (task.unit === "count") return "";
     const speed = speedOf(task);
     if (task.status !== "in-progress" || speed <= 0) return "";
     const eta = formatEta((task.total - task.loaded) / speed);
@@ -160,7 +166,8 @@ function TransferManager({
             </Typography>
             <Stack spacing={2}>
               {tasks.map((task) => {
-                const speed = humanReadableSpeed(speedOf(task));
+                const speed =
+                  task.unit === "count" ? "" : humanReadableSpeed(speedOf(task));
                 const unknownSize =
                   task.total === 0 && task.status === "in-progress";
                 return (
@@ -189,11 +196,13 @@ function TransferManager({
                       </Typography>
                     </Stack>
                     <Typography variant="caption" color="text.secondary">
-                      {task.total > 0
-                        ? `${humanReadableSize(task.loaded)} / ${humanReadableSize(task.total)}`
-                        : translate("downloadedSoFar", {
-                            size: humanReadableSize(task.loaded),
-                          })}
+                      {task.unit === "count"
+                        ? `${task.loaded} / ${task.total} ${translate("itemsUnit")}`
+                        : task.total > 0
+                          ? `${humanReadableSize(task.loaded)} / ${humanReadableSize(task.total)}`
+                          : translate("downloadedSoFar", {
+                              size: humanReadableSize(task.loaded),
+                            })}
                       {speed ? ` · ${speed}` : ""}
                       {taskEtaText(task)}
                       {" · "}

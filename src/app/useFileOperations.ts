@@ -1,5 +1,5 @@
 import { ClipboardState } from "./clipboard";
-import { deleteTreePermanently } from "./hardDelete";
+import { enqueuePermanentDelete } from "./hardDelete";
 import { NotifyFn } from "./notify";
 import { strings, translate } from "./strings";
 import {
@@ -81,24 +81,14 @@ export function useFileOperations(deps: FileOperationsDeps) {
   const handleConfirmDelete = async () => {
     if (!confirmDelete) return;
     const targets = confirmDelete;
-    // fork 补丁：删除改为客户端分批永久删除。服务端软删除要在单次请求里
-    // 把整个子树复制进回收站，免费档 Worker 对大文件夹必撞 1102；本桶另有
-    // 7 天对象 lifecycle 兜底，回收站无实际价值。
-    const runDelete = async () => {
-      return deleteTreePermanently(targets);
-    };
+    // fork 补丁：删除改为客户端分批永久删除并排入传输面板（按项数报进度）。
+    // 服务端软删除要在单次请求里把整个子树复制进回收站，免费档 Worker 对
+    // 大文件夹必撞 1102；本桶另有 7 天对象 lifecycle 兜底，回收站无实际价值。
     try {
-      const deleted = await runDelete();
-      onNotify(translate("deletedCount", { count: deleted }), "success", {
-        duration: 7000,
-      });
+      enqueuePermanentDelete(targets);
+      onNotify(translate("deleteQueued"), "success");
     } catch (error) {
-      onNotify(errorMessage(error), "error", {
-        action: {
-          label: strings.retry,
-          onClick: () => runDelete().then(() => loadListing()).catch(() => {}),
-        },
-      });
+      onNotify(errorMessage(error), "error");
     } finally {
       setConfirmDelete(null);
       setSelectedKeys([]);

@@ -551,6 +551,11 @@ const entries: Record<string, DictionaryEntry> = {
   },
   confirmAction: { zh: "永久删除", en: "Delete permanently" },
   deletedCount: { zh: "已永久删除 {count} 项", en: "{count} item(s) permanently deleted" },
+  deleteQueued: {
+    zh: "已开始删除，进度见传输面板",
+    en: "Deletion started — track progress in the transfer panel",
+  },
+  deleteTaskName: { zh: "永久删除", en: "Deleting" },
   cancel: { zh: "取消", en: "Cancel" },
   refresh: { zh: "刷新", en: "Refresh" },
   ok: { zh: "确定", en: "OK" },
@@ -581,6 +586,8 @@ const entries: Record<string, DictionaryEntry> = {
   statusPending: { zh: "等待中", en: "Pending" },
   statusUploading: { zh: "上传中", en: "Uploading" },
   statusDownloading: { zh: "下载中", en: "Downloading" },
+  statusWorking: { zh: "执行中", en: "Working" },
+  itemsUnit: { zh: "项", en: "items" },
   statusMultipartUploading: { zh: "分块上传中", en: "Uploading (multipart)" },
   statusPaused: { zh: "已暂停", en: "Paused" },
   statusPausedResumable: {

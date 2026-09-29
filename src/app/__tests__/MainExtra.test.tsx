@@ -23,7 +23,7 @@ import {
   openFile,
   searchFiles,
 } from "../transfer";
-import { deleteTreePermanently } from "../hardDelete";
+import { enqueuePermanentDelete } from "../hardDelete";
 import { setLang, strings, translate } from "../strings";
 import type { TransferTask } from "../types";
 
@@ -64,7 +64,7 @@ vi.mock("../trash", () => ({
 }));
 
 vi.mock("../hardDelete", () => ({
-  deleteTreePermanently: vi.fn(),
+  enqueuePermanentDelete: vi.fn(),
 }));
 
 vi.mock("../../PreviewDialog", () => ({ __esModule: true, default: () => null }));
@@ -91,7 +91,7 @@ const mockFetchPath = fetchPath as unknown as Mock;
 const mockSearch = searchFiles as unknown as Mock;
 const mockCopyPaste = copyPaste as unknown as Mock;
 const mockCreateFolder = createFolder as unknown as Mock;
-const mockHardDelete = deleteTreePermanently as unknown as Mock;
+const mockHardDelete = enqueuePermanentDelete as unknown as Mock;
 const mockCollect = collectFilesFromDataTransfer as unknown as Mock;
 const mockDownload = downloadFile as unknown as Mock;
 const mockFolderArchive = downloadFolderArchive as unknown as Mock;
@@ -176,7 +176,7 @@ beforeEach(() => {
   mockCreateFolder.mockReset();
   mockCreateFolder.mockResolvedValue(undefined);
   mockHardDelete.mockReset();
-  mockHardDelete.mockResolvedValue(1);
+  mockHardDelete.mockReturnValue(undefined);
   mockCollect.mockReset();
   mockCollect.mockResolvedValue([]);
   mockDownload.mockReset();
@@ -346,34 +346,18 @@ describe("Main 永久删除/重试闭环", () => {
     fireEvent.click(screen.getByRole("button", { name: strings.confirmAction }));
   }
 
-  test("删除成功 → 永久删除提示（无 undo 入口）", async () => {
+  test("删除 → 入队传输面板 + 已开始删除提示（无 undo 入口）", async () => {
     const onNotify = vi.fn();
-    mockHardDelete.mockResolvedValueOnce(1);
     await openConfirmAndConfirm(onNotify);
     await waitFor(() => expect(mockHardDelete).toHaveBeenCalledWith(["a.txt"]));
     await waitFor(() =>
       expect(onNotify).toHaveBeenCalledWith(
-        translate("deletedCount", { count: 1 }),
-        "success",
-        expect.anything()
+        translate("deleteQueued"),
+        "success"
       )
     );
-    // fork 语义：无回收站、无撤销
-    expect(onNotify.mock.calls[0][2]?.action).toBeUndefined();
-  });
-
-  test("删除失败 → retry 重试成功", async () => {
-    const onNotify = vi.fn();
-    mockHardDelete.mockRejectedValueOnce(new Error("delete-fail"));
-    await openConfirmAndConfirm(onNotify);
-    await waitFor(() =>
-      expect(onNotify).toHaveBeenCalledWith("delete-fail", "error", expect.anything())
-    );
-    const retry = onNotify.mock.calls.find((c) => c[0] === "delete-fail")![2].action.onClick;
-    await act(async () => {
-      retry();
-    });
-    await waitFor(() => expect(mockHardDelete).toHaveBeenCalledTimes(2));
+    // fork 语义：无回收站、无撤销；删除进度与失败重试都在传输面板里
+    expect(onNotify.mock.calls[0][2]).toBeUndefined();
   });
 });
 

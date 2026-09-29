@@ -18,7 +18,7 @@ import {
   searchFiles,
   selectDirectoryFiles,
 } from "../transfer";
-import { deleteTreePermanently } from "../hardDelete";
+import { enqueuePermanentDelete } from "../hardDelete";
 import { setLang, strings, translate } from "../strings";
 
 vi.mock("../auth", () => ({
@@ -53,7 +53,7 @@ vi.mock("../transfer", () => ({
 }));
 
 vi.mock("../hardDelete", () => ({
-  deleteTreePermanently: vi.fn(),
+  enqueuePermanentDelete: vi.fn(),
 }));
 
 vi.mock("../../PreviewDialog", () => ({ __esModule: true, default: () => null }));
@@ -75,7 +75,7 @@ const mockFetchPath = fetchPath as unknown as Mock;
 const mockSearch = searchFiles as unknown as Mock;
 const mockCopyPaste = copyPaste as unknown as Mock;
 const mockCreateFolder = createFolder as unknown as Mock;
-const mockHardDelete = deleteTreePermanently as unknown as Mock;
+const mockHardDelete = enqueuePermanentDelete as unknown as Mock;
 const mockCollect = collectFilesFromDataTransfer as unknown as Mock;
 const mockSelectDir = selectDirectoryFiles as unknown as Mock;
 const mockDownload = downloadFile as unknown as Mock;
@@ -165,7 +165,7 @@ beforeEach(() => {
   mockCreateFolder.mockReset();
   mockCreateFolder.mockResolvedValue(undefined);
   mockHardDelete.mockReset();
-  mockHardDelete.mockResolvedValue(1);
+  mockHardDelete.mockReturnValue(undefined);
   mockCollect.mockReset();
   mockCollect.mockResolvedValue([]);
   mockSelectDir.mockReset();

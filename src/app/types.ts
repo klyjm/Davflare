@@ -8,7 +8,7 @@ export interface FileItem {
   thumbnail?: string;
 }
 
-export type TransferType = "upload" | "download";
+export type TransferType = "upload" | "download" | "job";
 
 /** 下载任务入队请求：downloadUrl 为带鉴权可 fetch 的地址，name 为保存文件名；
  * 归档打包（POST /api/archive）额外携带 method/body */
@@ -16,6 +16,20 @@ export interface DownloadRequest {
   name: string;
   downloadUrl: string;
   init?: { method?: string; body?: string };
+}
+
+/** 自定义任务（type === "job"）的执行上下文：report 回报进度，signal 支持取消 */
+export interface JobContext {
+  signal?: AbortSignal;
+  report: (loaded: number, total: number) => void;
+}
+
+/** job 任务的入队描述：unit 决定进度单位（字节 or 项数） */
+export interface JobSpec {
+  name: string;
+  unit?: "bytes" | "count";
+  total?: number;
+  run: (ctx: JobContext) => Promise<void>;
 }
 
 export type TransferStatus =
@@ -48,6 +62,9 @@ export interface TransferTask {
   downloadUrl?: string;
   saveAs?: string;
   downloadInit?: { method?: string; body?: string };
+  /** 自定义任务（type === "job"，fork 补丁）：进度单位与执行体 */
+  unit?: "bytes" | "count";
+  job?: (ctx: JobContext) => Promise<void>;
 }
 
 export interface ShareInfo {
