@@ -1,6 +1,11 @@
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi, type Mock } from "vitest";
 
-import { writeTreeToDirectory, type DiskEntry } from "../diskDownload";
+import {
+  pickTargetDirectory,
+  supportsDiskWrite,
+  writeTreeToDirectory,
+  type DiskEntry,
+} from "../diskDownload";
 
 // Fake FS Access 句柄：只实现 writeTreeToDirectory 用到的面
 // （getDirectoryHandle/getFileHandle/createWritable + write/close/abort）。
@@ -158,5 +163,92 @@ describe("writeTreeToDirectory", () => {
     const writable = root.files.get("bad.txt")!.writable;
     expect(writable.aborted).toBe(true);
     expect(writable.closed).toBe(false);
+  });
+
+  test("HTTP 非 2xx → 抛错并 abort", async () => {
+    const root = new FakeDirHandle();
+    await expect(
+      writeTreeToDirectory({
+        root: root as unknown as FileSystemDirectoryHandle,
+        subfolder: "",
+        entries: [fileEntry("a.txt", 1)],
+        fetchFile: async () =>
+          ({
+            ok: false,
+            status: 502,
+            headers: { get: () => "text/plain" },
+            body: null,
+          }) as unknown as Response,
+        report: vi.fn(),
+      })
+    ).rejects.toThrow("HTTP 502: a.txt");
+    expect(root.files.get("a.txt")!.writable.aborted).toBe(true);
+  });
+
+  test("目录占位对象被误判为文件 → 补建目录，不产 0 字节假文件", async () => {
+    const root = new FakeDirHandle();
+    await writeTreeToDirectory({
+      root: root as unknown as FileSystemDirectoryHandle,
+      subfolder: "",
+      entries: [fileEntry("m/n", 5)],
+      fetchFile: async () =>
+        ({
+          ok: true,
+          status: 200,
+          headers: { get: () => "application/x-directory" },
+          body: {
+            getReader: () => ({
+              read: async () => ({ done: true, value: undefined }),
+            }),
+          },
+        }) as unknown as Response,
+      report: vi.fn(),
+    });
+    expect(root.dirs.get("m")!.dirs.get("n")).toBeDefined();
+    // 文件句柄是 openWritable 建的，但 writable 已 abort，内容未落
+    const handle = root.dirs.get("m")!.files.get("n");
+    if (handle) {
+      expect(handle.writable.aborted).toBe(true);
+      expect(handle.writable.byteLength).toBe(0);
+    }
+  });
+});
+
+describe("目录选择器（pickTargetDirectory / supportsDiskWrite）", () => {
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).showDirectoryPicker;
+  });
+
+  test("无 showDirectoryPicker → 不支持且返回 null", async () => {
+    expect(supportsDiskWrite()).toBe(false);
+    await expect(pickTargetDirectory()).resolves.toBeNull();
+  });
+
+  test("选择成功 → 返回句柄，且带 readwrite 模式调用", async () => {
+    const handle = { kind: "directory" };
+    (window as unknown as Record<string, unknown>).showDirectoryPicker = vi
+      .fn()
+      .mockResolvedValue(handle);
+    expect(supportsDiskWrite()).toBe(true);
+    await expect(pickTargetDirectory()).resolves.toBe(handle);
+    expect(
+      (window as unknown as { showDirectoryPicker: Mock }).showDirectoryPicker
+    ).toHaveBeenCalledWith({ mode: "readwrite" });
+  });
+
+  test("用户取消（AbortError）→ 静默返回 null", async () => {
+    (window as unknown as Record<string, unknown>).showDirectoryPicker = vi
+      .fn()
+      .mockRejectedValue(new DOMException("canceled", "AbortError"));
+    await expect(pickTargetDirectory()).resolves.toBeNull();
+  });
+
+  test("其他错误（如 SecurityError）→ 原样抛出", async () => {
+    (window as unknown as Record<string, unknown>).showDirectoryPicker = vi
+      .fn()
+      .mockRejectedValue(new DOMException("denied", "SecurityError"));
+    await expect(pickTargetDirectory()).rejects.toMatchObject({
+      name: "SecurityError",
+    });
   });
 });

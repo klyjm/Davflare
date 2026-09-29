@@ -79,6 +79,27 @@ describe("TransferManager", () => {
     expect(actions.cancel).toHaveBeenCalledWith("t1");
   });
 
+  test("count 任务按项数显示进度，不混入字节总进度", () => {
+    const jobTask: TransferTask = {
+      id: "j1",
+      type: "job",
+      status: "in-progress",
+      name: "永久删除",
+      basedir: "",
+      remoteKey: "",
+      loaded: 1,
+      total: 3,
+      unit: "count",
+    };
+    mockQueue.mockReturnValue([jobTask]);
+    render(<TransferManager open onClose={vi.fn()} />);
+    // 行内进度为“n / m 项”，状态为“执行中”
+    expect(screen.getByText(/1 \/ 3 项/)).toBeInTheDocument();
+    expect(screen.getByText(/执行中/)).toBeInTheDocument();
+    // 没有字节型任务时总进度不显示字节总数
+    expect(screen.getByText(strings.transferInProgress)).toBeInTheDocument();
+  });
+
   test("download task shows downloading state without pause", () => {
     const download: TransferTask = {
       id: "d1",

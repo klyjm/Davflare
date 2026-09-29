@@ -51,6 +51,10 @@ export default defineConfig({
       //   global      94.8433 / 86.2098 / 90.3382 / 94.8433
       //   src/**      96.7529 / 88.7599 / 85.9492 / 96.7529
       //   functions   91.9428 / 83.5253 / 98.3607 / 91.9428
+      // 2026-09 三轮（fork UI 改造：目录下载/job 队列/删除入面板，重拨 src/**）：
+      //   global      94.6535 / 86.2631 / 90.1564 / 94.6535
+      //   src/**      96.30 / 88.59 / 85.75 / 96.30
+      //   functions   92.06 / 83.72 / 98.41 / 92.06
       thresholds: {
         global: {
           statements: 94.34,
@@ -59,10 +63,10 @@ export default defineConfig({
           lines: 94.34,
         },
         "src/**": {
-          statements: 96.25,
-          branches: 88.25,
-          functions: 85.44,
-          lines: 96.25,
+          statements: 95.8,
+          branches: 88.09,
+          functions: 85.25,
+          lines: 95.8,
         },
         "functions/**": {
           statements: 91.44,

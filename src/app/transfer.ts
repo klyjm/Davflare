@@ -295,8 +295,13 @@ async function expandDiskEntries(
     }
     const meta = await headMeta(key);
     if (meta.isDir) {
-      entries.push({ key, relPath: `${rel(key)}/`, size: 0, dir: true });
-    } else {
+      // 选中根自身（单文件夹下载且为空）不写占位条目——writeTreeToDirectory
+      // 已按 subfolder 建根目录，占位会造成 EMPTY/EMPTY/ 双层
+      if (key !== base) {
+        entries.push({ key, relPath: `${rel(key)}/`, size: 0, dir: true });
+      }
+    } else if (meta.ok) {
+      // 键在展开期间被删（headMeta 不 ok）时跳过，避免产生必 404 的幽灵文件
       entries.push({
         key,
         relPath: rel(key),
